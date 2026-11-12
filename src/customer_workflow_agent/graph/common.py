@@ -155,11 +155,33 @@ def build_requests(
         else:
             merged.append(r)
 
+    merged = address_and_payment_first(merged)
+
     # Transfers go last (they end the chat), at most one.
     transfers = [r for r in merged if r["type"] == "transfer"]
     rest = [r for r in merged if r["type"] != "transfer"]
     final = rest[: deps.settings.max_queue] + transfers[:1]
     return final
+
+
+def address_and_payment_first(requests: list[Request]) -> list[Request]:
+    """Changing a pending order's items locks it ("pending (item modified)"), after which its
+    address and payment can't change. So those go before the item change on the same order (or
+    when either order isn't known yet), whatever order the customer said them in: τ²-bench tasks
+    71 and 72, where top models lose the address change the same way."""
+    out = list(requests)
+    items_at = next((i for i, r in enumerate(out) if r["type"] == "modify_order_items"), None)
+    if items_at is None:
+        return out
+    oid = out[items_at]["order_id"]
+    later = [
+        r
+        for r in out[items_at + 1 :]
+        if r["type"] in ("modify_order_address", "modify_order_payment")
+        and (not r["order_id"] or not oid or r["order_id"] == oid)
+    ]
+    rest = [r for r in out if not any(r is m for m in later)]
+    return rest[:items_at] + later + rest[items_at:]
 
 
 def enqueue(queue: list[Request], new: list[Request]) -> list[Request]:

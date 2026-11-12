@@ -6,6 +6,9 @@ from customer_workflow_agent.resolve.text import match_one
 from customer_workflow_agent.store.models import OrderItem, Product
 
 MAX_CHOICES = 8
+# What a model sometimes puts in an option it wasn't told ("yes", "null"): not an option the
+# customer stated, unless the product really has that value (a keyboard's backlight "none").
+FILLER = {"yes", "no", "null", "none", "n/a", "na", "ok", "okay", "any", "whatever", "unknown"}
 
 
 def option_schema(product: Product) -> dict[str, list[str]]:
@@ -38,6 +41,8 @@ def resolve_variant(product: Product, line: OrderItem, desired: list[dict]) -> V
     stated: set[str] = set()
     for pair in desired:
         value, name = (pair.get("value") or "").strip(), (pair.get("name") or "").strip()
+        if value.lower() in FILLER and not any(match_one(value, v) for v in schema.values()):
+            continue
         key = match_one(name, schema) if name else None
         if key is not None:
             canonical = match_one(value, schema[key])
@@ -52,6 +57,8 @@ def resolve_variant(product: Product, line: OrderItem, desired: list[dict]) -> V
             return VariantMatch("unknown_option", unknown=value or name)
         target[key] = canonical
         stated.add(key)
+    if not stated:
+        return VariantMatch("need_desired")
 
     others = [v for v in product.variants.values() if v.item_id != line.item_id]
     exact = next((v for v in product.variants.values() if v.options == target), None)

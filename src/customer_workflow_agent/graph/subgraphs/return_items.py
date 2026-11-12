@@ -1,6 +1,8 @@
 """Return items from a delivered order (policy: status delivered; refund to the original
 payment method or an existing gift card). Large returns may need supervisor approval."""
 
+import re
+
 from customer_workflow_agent.graph.action import Ask, Check, Ctx, Found, Ready
 from customer_workflow_agent.graph.subgraphs.base import (
     catalog_for,
@@ -15,6 +17,8 @@ from customer_workflow_agent.policy.rules import Denial, refund_destinations
 from customer_workflow_agent.resolve.items import resolve_lines
 from customer_workflow_agent.resolve.text import norm
 from customer_workflow_agent.templates import format as F
+
+ALL_WORDS = re.compile(r"\b(all|everything|every item|whole order|entire order)\b", re.I)
 
 
 def check_returns_not_blocked(slots: dict, found: dict, ctx: Ctx) -> Check:
@@ -95,7 +99,9 @@ class ReturnItems:
     def merge(self, slots, turn, text, ctx):
         slots = merge_order_id(slots, turn, text)
         slots = dict(slots)
-        if turn.all_items:
+        # "Return the headphones, vacuum and watch" is not "return everything", even if the model
+        # flags it so (τ²-bench task 2): only the customer's own "all"/"everything" counts.
+        if turn.all_items and (not turn.items or ALL_WORDS.search(text)):
             slots["all_items"] = True
         if turn.items:
             items = [dict(i) for i in slots.get("items", [])]

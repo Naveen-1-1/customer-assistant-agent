@@ -33,7 +33,7 @@ from customer_workflow_agent.llm import prompts
 from customer_workflow_agent.llm.guard import safe_reply
 from customer_workflow_agent.llm.schemas import AuthExtraction, Classification
 from customer_workflow_agent.llm.structured import LLMUnavailable
-from customer_workflow_agent.resolve.ids import email_in, literal_in, zip_in
+from customer_workflow_agent.resolve.ids import email_in, emails_in, literal_in, zip_in, zips_in
 from customer_workflow_agent.store import StoreError
 from customer_workflow_agent.templates import messages as M
 from customer_workflow_agent.templates import suggestions as S
@@ -77,7 +77,9 @@ def build_parent_graph(deps: Deps) -> StateGraph:
         try:
             ex = await deps.llm.extract(AuthExtraction, prompts.auth(text))
             email = email or literal_in(ex.email, text)
-            zip_code = zip_code or literal_in(ex.zip, text)
+            # The model reads which zip is the customer's ("I'm X from San Jose, 95154") when the
+            # message also has another one (a new shipping address); the regex takes the first.
+            zip_code = literal_in(ex.zip, text) or zip_code
             first, last = literal_in(ex.first_name, text), literal_in(ex.last_name, text)
             wants_human, goodbye, has_request = ex.wants_human, ex.goodbye, ex.has_request
         except LLMUnavailable:
@@ -97,6 +99,13 @@ def build_parent_graph(deps: Deps) -> StateGraph:
         ):
             if value:
                 auth[key] = value
+        if other_zips := [z for z in zips_in(text) if z != auth.get("zip")]:
+            auth["other_zips"] = list(dict.fromkeys([*auth.get("other_zips", []), *other_zips]))
+        # "It's either a@x.com or b@x.com" (τ²-bench task 55): every email is tried.
+        if other_emails := [e for e in emails_in(text) if e != auth.get("email")]:
+            auth["other_emails"] = list(
+                dict.fromkeys([*auth.get("other_emails", []), *other_emails])
+            )
         update = {"auth": auth, "held_texts": held}
         if auth.get("email") or all(auth.get(k) for k in ("first_name", "last_name", "zip")):
             return {**update, "route": "auth_check"}
@@ -126,16 +135,17 @@ def build_parent_graph(deps: Deps) -> StateGraph:
     async def auth_check(state: ChatState) -> dict:
         auth = dict(state["auth"])
         user_id = None
-        for lookup in (
-            lambda: deps.store.find_user_id_by_email(auth["email"]) if auth.get("email") else None,
-            lambda: (
-                deps.store.find_user_id_by_name_zip(
-                    auth["first_name"], auth["last_name"], auth["zip"]
-                )
-                if all(auth.get(k) for k in ("first_name", "last_name", "zip"))
-                else None
-            ),
-        ):
+        named = all(auth.get(k) for k in ("first_name", "last_name", "zip"))
+        zips = [auth.get("zip"), *auth.get("other_zips", [])] if named else []
+        emails = [auth["email"], *auth.get("other_emails", [])] if auth.get("email") else []
+        lookups = [lambda e=e: deps.store.find_user_id_by_email(e) for e in dict.fromkeys(emails)]
+        lookups += [
+            lambda z=z: deps.store.find_user_id_by_name_zip(
+                auth["first_name"], auth["last_name"], z
+            )
+            for z in dict.fromkeys(zips)
+        ]
+        for lookup in lookups:
             try:
                 user_id = lookup()
             except StoreError:

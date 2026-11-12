@@ -35,6 +35,11 @@ def resolve_lines(order: Order, ref: dict, exclude: set[int] | None = None) -> L
     """Lines for one item reference. Several identical lines are fine; different items are not."""
     exclude = exclude or set()
     cands = _candidates(order, ref, exclude)
+    if not cands and ref.get("options"):
+        # The model often lists the options the customer wants ("the backpack → grey, medium")
+        # with the item: then the product name alone decides. Several different items still
+        # make it ask, and the popup shows the exact line before anything changes.
+        cands = _candidates(order, {**ref, "options": []}, exclude)
     if not cands:
         return LineMatch("none")
     by_item: dict[str, list[int]] = {}

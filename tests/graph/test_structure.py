@@ -25,7 +25,7 @@ ORDER_DELIVERED = ["find_order", "check_delivered"]
 SWAP = ["find_items", "choose_new_options", "choose_payment_method", "check_gift_card_balance"]
 
 CHECKS = {
-    "cancel_order": [*ORDER_PENDING, "check_reason"],
+    "cancel_order": [*ORDER_PENDING, "check_whole_order", "check_reason"],
     "modify_order_address": [*ORDER_PENDING, "check_new_address"],
     "modify_order_payment": [
         *ORDER_PENDING,
@@ -33,7 +33,7 @@ CHECKS = {
         "choose_payment_method",
         "check_gift_card_balance",
     ],
-    "modify_order_items": [*ORDER_PENDING, *SWAP],
+    "modify_order_items": [*ORDER_PENDING, "check_whole_order", *SWAP],
     "exchange_items": [*ORDER_DELIVERED, *SWAP],
     "return_items": [
         *ORDER_DELIVERED,

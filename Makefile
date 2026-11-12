@@ -3,7 +3,14 @@ NPM := npm --prefix frontend
 API := $(VENV)/uvicorn --factory customer_workflow_agent.api.app:create_app --host 127.0.0.1 --port 8000
 
 .PHONY: install dev dev-api dev-web serve test test-live test-web test-alerts lint format build-web graph \
-	prompt-fingerprints metrics metrics-prometheus metrics-grafana fake-llm load reset-data
+	prompt-fingerprints metrics metrics-prometheus metrics-grafana fake-llm load reset-data eval tau2-logs
+
+# Evaluation runs (see src/customer_workflow_agent/evalkit/run.py): CASES, AGENTS, MODEL, USER_MODEL, TRIALS
+CASES ?= 0
+AGENTS ?= baseline,workflow
+MODEL ?= poolside/laguna-xs-2.1
+USER_MODEL ?= poolside/laguna-xs-2.1
+TRIALS ?= 1
 
 install:  ## Python venv + backend deps, and frontend deps
 	python3.13 -m venv .venv
@@ -89,3 +96,10 @@ metrics-grafana:
 
 reset-data:  ## Delete chats and the store's working copy (stop the server first)
 	rm -rf var/
+
+eval:  ## Simulated-customer runs of τ²-bench tasks against the baseline and/or the workflow (var/eval/)
+	$(VENV)/python -m customer_workflow_agent.evalkit.run --cases $(CASES) --agents $(AGENTS) \
+		--model $(MODEL) --user-model $(USER_MODEL) --trials $(TRIALS)
+
+tau2-logs:  ## Where τ²-bench's published top-model runs fail (docs/pitch/top-model-failures.md)
+	$(VENV)/python -m customer_workflow_agent.evalkit.tau2_logs

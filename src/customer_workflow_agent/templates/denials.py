@@ -16,6 +16,7 @@ DenialCode = Literal[
     "payment_history_not_single",
     "returns_blocked",
     "product_change_not_allowed",
+    "remove_items_not_allowed",
     "store_rejected",
 ]
 
@@ -62,6 +63,11 @@ _TEXT: dict[str, str] = {
     "product_change_not_allowed": (
         "I can only swap an item for a different option of the same product, not for a "
         "different product."
+    ),
+    "remove_items_not_allowed": (
+        "Items can't be removed from a pending order one by one — a pending order can only be "
+        "cancelled as a whole. I can cancel the whole order, swap items for other options of the "
+        "same product, or change the order's shipping address or payment method."
     ),
     "store_rejected": "I'm sorry, that change couldn't be completed: {reason}",
 }

@@ -32,13 +32,15 @@ class Tracing:
     def enabled(self) -> bool:
         return self.client is not None
 
-    def chat(self, chat_id: str) -> AbstractContextManager:
+    def chat(
+        self, chat_id: str, metadata: dict | None = None, project: str | None = None
+    ) -> AbstractContextManager:
         # enabled=False also overrides any LANGSMITH_TRACING in the environment.
         return langsmith.tracing_context(
             enabled=self.enabled,
             client=self.client,
-            project_name=self.project,
-            metadata={"thread_id": chat_id},
+            project_name=project or self.project,
+            metadata={**(metadata or {}), "thread_id": chat_id},
         )
 
     def flush(self) -> None:

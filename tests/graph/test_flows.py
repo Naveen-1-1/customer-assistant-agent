@@ -5,6 +5,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from customer_workflow_agent.deps import Deps
 from customer_workflow_agent.graph.subgraphs.cancel_order import gave_reason
+from customer_workflow_agent.graph.subgraphs.swap_items import removes_some_items
 from customer_workflow_agent.llm.fake import FailingLLM, ScriptedLLM
 from customer_workflow_agent.llm.schemas import (
     AddressFields,
@@ -22,6 +23,7 @@ from customer_workflow_agent.llm.schemas import (
 )
 from customer_workflow_agent.store.models import WorkingDB
 from customer_workflow_agent.templates import messages as M
+from customer_workflow_agent.templates.denials import denial_text
 from tests.conftest import sara_db
 from tests.graph.helpers import (
     ChatDriver,
@@ -161,6 +163,84 @@ async def test_cancel_with_other_reason_is_denied(real_db):
     assert store.get_order(IVAN_PENDING).status == "pending"
 
 
+NOAH, NOAH_ORDER = "noah.patel1792@example.com", "#W1845024"  # office + hiking items, pending
+SOME_ITEMS = "Please cancel the office items in #W1845024 but keep the hiking stuff."
+
+
+@pytest.mark.parametrize(
+    ("text", "some"),
+    [
+        (SOME_ITEMS, True),
+        # τ²-bench task 34, the simulated customer's own words (two runs).
+        ("I really need to cancel just the office stuff and keep the hiking items.", True),
+        (
+            "I need to cancel the office stuff (that's the Mechanical Keyboard, Office Chair, and "
+            "probably those Headphones too?) but I really want to keep the hiking items.",
+            True,
+        ),
+        ("Please cancel order #W1845024, just that one.", False),
+        ("Cancel the whole order, I no longer need it.", False),
+        # τ²-bench task 99: the customer accepts the whole order in the same breath.
+        (
+            "I need to cancel the skateboard. If we can't cancel just that one item, I'm okay "
+            "cancelling the whole order.",
+            False,
+        ),
+        # τ²-bench task 74: "keep" without anything kept, and a whole-order cancel.
+        (
+            "I'm sorry, I keep getting confused. I want to cancel order #W1845024 because I "
+            "don't need those items.",
+            False,
+        ),
+        # τ²-bench task 72: taking back a request isn't removing items.
+        (
+            "I need to cancel this request. I only want to modify just the backpack change.",
+            False,
+        ),
+        # τ²-bench task 34, round 18: "keep" ends the phrase; "not … the whole order".
+        (
+            "The Mechanical Keyboard, Headphones, and Office Chair (the office items I need to "
+            "cancel) along with the Cycling Helmet and Hiking Boots (the hiking stuff I want to "
+            "keep).",
+            True,
+        ),
+        ("NO - do NOT cancel the whole order. I want to cancel ONLY the office items.", True),
+    ],
+)
+def test_removes_some_items(real_db, text, some):
+    store, _ = new_store(real_db)
+    assert removes_some_items(store.get_order(NOAH_ORDER), text) is some
+
+
+@pytest.mark.parametrize("kind", ["cancel_order", "modify_order_items"])
+async def test_cancelling_some_items_says_only_whole_orders_cancel(real_db, kind):
+    """τ²-bench task 34: no item-by-item questions, no whole-order popup; the customer hears
+    what is possible instead."""
+    llm = ScriptedLLM().on(type(auth_ex()), NOAH, auth_ex(email=NOAH))
+    llm.on(Classification, "office", classified(req(kind, NOAH_ORDER)))
+    llm.on(CancelTurn, "office", cancel_turn())
+    llm.on(ItemsTurn, "office", make(ItemsTurn))
+    chat, store, _ = await verified_chat(real_db, llm, email=NOAH)
+    await chat.say(SOME_ITEMS)
+    assert chat.agent_texts()[-2] == denial_text("remove_items_not_allowed")
+    assert chat.last_agent() == M.ANYTHING_ELSE
+    assert store.get_order(NOAH_ORDER).status == "pending"
+
+
+async def test_whole_order_cancel_after_the_partial_one(real_db):
+    llm = ScriptedLLM().on(type(auth_ex()), NOAH, auth_ex(email=NOAH))
+    llm.on(Classification, "office", classified(req("cancel_order", NOAH_ORDER)))
+    llm.on(Classification, "whole", classified(req("cancel_order", NOAH_ORDER)))
+    llm.on(CancelTurn, "office", cancel_turn())
+    llm.on(CancelTurn, "whole", cancel_turn("no longer needed", "no longer need it"))
+    chat, store, _ = await verified_chat(real_db, llm, email=NOAH)
+    await chat.say(SOME_ITEMS)
+    await chat.say(f"ok, cancel the whole order {NOAH_ORDER} then, I no longer need it")
+    assert chat.pause["type"] == "confirm"
+    await chat.click(True)
+    assert store.get_order(NOAH_ORDER).status == "cancelled"
+
+
 async def test_other_users_order_looks_not_found(real_db):
     llm = ivan_llm()
     llm.on(Classification, "cancel", classified(req("cancel_order", YUSUF_ORDER)))
@@ -210,6 +290,34 @@ async def test_auth_by_name_and_zip_across_turns(real_db):
     assert chat.last_agent() == M.auth_missing(["zip code"])
     await chat.say("19122")
     assert chat.values["user_id"] == "yusuf_rossi_9620"
+
+
+@pytest.mark.parametrize("llm_zip", ["95154", None])
+async def test_auth_with_a_second_zip_in_the_message(real_db, llm_zip):
+    """τ²-bench task 59: a new shipping address's zip comes before the customer's own."""
+    text = (
+        "Please send #W2702727 to 1234 Elm St, Springfield, IL, 62701. "
+        "I'm Yusuf Taylor from San Jose, CA, 95154."
+    )
+    llm = ScriptedLLM().on(
+        type(auth_ex()), "Yusuf", auth_ex(first_name="Yusuf", last_name="Taylor", zip=llm_zip)
+    )
+    store, _ = new_store(real_db)
+    chat = ChatDriver(Deps(store, llm, settings()))
+    await chat.start()
+    await chat.say(text)
+    assert chat.values["user_id"] == "yusuf_taylor_7149"
+
+
+async def test_auth_tries_every_email_in_the_message(real_db):
+    """τ²-bench task 55: the customer gives two emails and only the second is on the account."""
+    text = "It's either silva7872@example.com or amelia.silva7872@example.com."
+    llm = ScriptedLLM().on(type(auth_ex()), "@", auth_ex(email="silva7872@example.com"))
+    store, _ = new_store(real_db)
+    chat = ChatDriver(Deps(store, llm, settings()))
+    await chat.start()
+    await chat.say(text)
+    assert chat.values["user_id"] == "amelia_silva_7726"
 
 
 async def test_three_failed_verifications_offer_human(real_db):
@@ -339,7 +447,9 @@ async def test_goodbye_mid_request_ends_without_change(real_db):
     assert store.get_order(IVAN_PENDING).status == "pending"
 
 
-async def test_items_then_address_on_same_order_is_denied():
+async def test_items_then_address_on_same_order_does_the_address_first():
+    """Changing items locks the order, so the address change goes first whatever order the
+    customer said them in; both then go through (τ²-bench tasks 71, 72)."""
     db = sara_db()
     llm = ScriptedLLM().on(type(auth_ex()), "sara", auth_ex(email="sara.doe@example.com"))
     llm.on(
@@ -383,11 +493,14 @@ async def test_items_then_address_on_same_order_is_denied():
         "change the t-shirt in #W0000000 to size L with my visa, and ship it to "
         "9 Elm St, Boston MA 02101"
     )
+    assert chat.pause["action"] == "modify_order_address"
+    assert any("9 Elm St" in line for line in chat.pause["summary"]["lines"])
+    await chat.click(True)
+    assert store.get_order("#W0000000").address.address1 == "9 Elm St"
     assert M.ITEMS_ONCE_REMINDER in chat.agent_texts()
     assert any("size: M" in line and "size: L" in line for line in chat.pause["summary"]["lines"])
     await chat.click(True)
     assert store.get_order("#W0000000").status == "pending (item modified)"
-    assert "already been changed once" in chat.agent_texts()[-2]
 
 
 async def test_modify_payment_to_gift_card(real_db):

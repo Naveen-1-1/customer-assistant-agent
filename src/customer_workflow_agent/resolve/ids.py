@@ -28,9 +28,19 @@ def email_in(text: str) -> str | None:
     return m.group(0) if m else None
 
 
+def emails_in(text: str) -> list[str]:
+    """Every email in the text: "it's either a@x.com or b@x.com"."""
+    return list(dict.fromkeys(EMAIL.findall(text or "")))
+
+
 def zip_in(text: str) -> str | None:
     m = ZIP.search(text or "")
     return m.group(1) if m else None
+
+
+def zips_in(text: str) -> list[str]:
+    """Every 5-digit zip in the text: a message can carry a new address's zip as well."""
+    return list(dict.fromkeys(ZIP.findall(text or "")))
 
 
 def literal_in(value: str | None, text: str) -> str | None:

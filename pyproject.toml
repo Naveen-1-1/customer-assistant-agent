@@ -57,6 +57,10 @@ line-length = 100
 target-version = "py313"
 src = ["src", "tests"]
 
+[tool.ruff.lint.per-file-ignores]
+# τ²-bench's simulator guidelines, kept word for word.
+"src/customer_workflow_agent/evalkit/simulator.py" = ["E501"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
 ignore = ["RUF001", "RUF002", "RUF003"]

@@ -13,6 +13,7 @@ Each request type lists its checks in order (`steps`), so the graph shows what i
 exactly what `execute` writes. Nothing writes before the popup's yes.
 """
 
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -117,9 +118,39 @@ class ActionSpec(Protocol):
     def result_text(self, returned: object, ready: Ready, ctx: Ctx) -> str: ...
 
 
-def apply_choice(slots: dict, turn: Turn, choices: dict | None) -> dict:
-    """Map 'the second one' onto the list the agent just offered."""
+PAYMENT_WORDS = (
+    "paypal",
+    "gift card",
+    "visa",
+    "mastercard",
+    "american express",
+    "amex",
+    "discover",
+)
+
+
+def named_payment_choice(text: str, labels: list[str]) -> int | None:
+    """The one offered payment method the customer's words name ("card ending 2478", "PayPal"),
+    found in code: a message that also asks something new can leave the model's fields empty."""
+    t = text.lower()
+    # Card digits are the strongest signal; brand or kind words only count when no digits match.
+    by_digits = [
+        i for i, lab in enumerate(labels) if any(d in t for d in re.findall(r"\d{4,}", lab))
+    ]
+    by_words = [
+        i for i, lab in enumerate(labels) if any(w in lab.lower() and w in t for w in PAYMENT_WORDS)
+    ]
+    hits = by_digits or by_words
+    return hits[0] if len(hits) == 1 else None
+
+
+def apply_choice(slots: dict, turn: Turn, choices: dict | None, text: str = "") -> dict:
+    """Map 'the second one' (or a payment method named by its card or kind) onto the list the
+    agent just offered."""
     n = turn.choice_number
+    if choices and not n and choices["kind"] in ("payment", "refund") and choices.get("labels"):
+        i = named_payment_choice(text, choices["labels"])
+        n = None if i is None else i + 1
     if not choices or not n or not 1 <= n <= len(choices["values"]):
         return slots
     value = choices["values"][n - 1]
@@ -252,7 +283,7 @@ def build_action_subgraph(spec: ActionSpec, deps: Deps):
         if new:
             update["queue"] = enqueue(queue, new)
             msgs.append(agent_msg(M.QUEUED))
-        slots = apply_choice(slots, turn, work.get("choices"))
+        slots = apply_choice(slots, turn, work.get("choices"), text)
         slots = spec.merge(slots, turn, text, c)
         work["slots"] = slots
         work["choices"] = None
@@ -278,7 +309,8 @@ def build_action_subgraph(spec: ActionSpec, deps: Deps):
                         "messages": [agent_msg(M.TOO_MANY_ASKS)],
                         "route": "dropped",
                     }
-                work.update(asks=asks, ask=result.__dict__, choices=result.choices)
+                choices = result.choices and {**result.choices, "labels": list(result.options)}
+                work.update(asks=asks, ask=result.__dict__, choices=choices)
                 return {"work": work, "route": "ask"}
             work["found"] = {**found, **result.values}
             return {"work": work, "route": nxt}

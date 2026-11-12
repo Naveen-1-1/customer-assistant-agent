@@ -4,6 +4,7 @@ replaying the task's expected actions on a fresh store."""
 import json
 
 from customer_workflow_agent.deps import Deps
+from customer_workflow_agent.evalkit import replay
 from customer_workflow_agent.llm.fake import ScriptedLLM
 from customer_workflow_agent.llm.schemas import (
     AuthExtraction,
@@ -19,17 +20,13 @@ from customer_workflow_agent.llm.schemas import (
 from customer_workflow_agent.store.models import WorkingDB
 from tests.conftest import PROJECT_ROOT
 from tests.graph.helpers import ChatDriver, auth_ex, classified, make, new_store, req, settings
-from tests.store.test_tasks_replay import apply_action, write_actions
 
 TASKS = {t["id"]: t for t in json.loads((PROJECT_ROOT / "data" / "tasks.json").read_text())}
-BOOKKEEPING = {"ledger", "transfers", "return_blocked_orders"}
+BOOKKEEPING = replay.BOOKKEEPING
 
 
 def expected_db(task_id: str, db: WorkingDB) -> dict:
-    store, _ = new_store(db)
-    for i, action in enumerate(write_actions(TASKS[task_id])):
-        apply_action(store, action["name"], action["arguments"], f"gold-{i}")
-    return store._db.model_dump(exclude=BOOKKEEPING)
+    return replay.expected_db(TASKS[task_id], db)
 
 
 def choice_index(text: str, needle: str) -> int:

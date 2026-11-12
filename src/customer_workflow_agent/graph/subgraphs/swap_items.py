@@ -2,6 +2,7 @@
 or exchange a delivered order's items. Policy: same product, different option, available;
 a payment method for the price difference; a gift card must cover it; all items in one go."""
 
+import re
 from itertools import zip_longest
 
 from customer_workflow_agent.graph.action import Ask, Check, Ctx, Found, Ready
@@ -22,6 +23,68 @@ from customer_workflow_agent.store.models import Order
 from customer_workflow_agent.templates import format as F
 from customer_workflow_agent.templates import messages as M
 from customer_workflow_agent.templates.suggestions import SKIP_REQUEST, suggestion
+
+
+def said_by_customer(product: str, text: str) -> bool:
+    """Did the customer's own words name this product ("the thermostat" for Smart Thermostat)?
+    The model sometimes adds an item nobody mentioned; like ids, items must come from the text."""
+    t = norm(text)
+    words = [w.rstrip("s") for w in norm(product).split() if len(w) >= 4]
+    return mentions(product, text) or any(w in t for w in words)
+
+
+# "Cancel the office items but keep the hiking gear" (τ²-bench tasks 33, 34): a pending order
+# can't drop single items, only be cancelled whole. Said plainly, before any item or reason is
+# asked for, the customer can pick what is possible instead.
+# "Cancel this request" takes back a request, it doesn't remove items (τ²-bench task 72).
+_REMOVE = re.compile(
+    r"\b(cancel|remove|drop|delete|get rid of|take (?:out|off))\b"
+    r"(?!\s+(?:this|that|the|my)\s+(?:request|change|modification|update|exchange|confirmation))",
+    re.I,
+)
+# "Keep" with what is kept, or ending the phrase ("the hiking stuff I want to keep)"); "I keep
+# getting confused" isn't one (τ²-bench task 74).
+_SOME = re.compile(
+    r"\b(?:keep(?=\s+(?:the|my|these|those)\b|\s*[.,;:!?)]|\s*$)|"
+    r"(?:except|but not|rest of|partial(?:ly)?|individual|some of|"
+    r"(?:only|just) (?:the|my|some))\b)",
+    re.I | re.M,
+)
+_WHOLE = re.compile(r"\b(whole|entire|everything|all of (?:it|them)|all (?:the|my) items)\b", re.I)
+# "Do NOT cancel the whole order" is the opposite of asking for it (τ²-bench task 34).
+_NOT_WHOLE = re.compile(r"\b(?:not|n't|never)\b[^.!?\n]{0,30}\b(?:whole|entire)\b", re.I)
+_ITEM_WORDS = re.compile(r"\b(items?|stuff|things|products?|gear)\b", re.I)
+
+
+def asks_whole(text: str) -> bool:
+    return bool(_WHOLE.search(text)) and not _NOT_WHOLE.search(text)
+
+
+def removes_some_items(order: Order, text: str) -> bool:
+    """Does the customer ask to cancel or remove part of this order's items?"""
+    if not (_REMOVE.search(text) and _SOME.search(text)) or asks_whole(text):
+        return False
+    return any(said_by_customer(i.name, text) for i in order.items) or bool(
+        _ITEM_WORDS.search(text)
+    )
+
+
+def note_partial(slots: dict, text: str) -> dict:
+    """Keep the message that asked to remove some items until the customer asks for the whole
+    order; a later "#W1845024" (which order?) doesn't take it back."""
+    if asks_whole(text):
+        return {k: v for k, v in slots.items() if k != "partial_text"}
+    if _REMOVE.search(text) and _SOME.search(text):
+        return {**slots, "partial_text": text}
+    return slots
+
+
+def check_whole_order(slots: dict, found: dict, ctx: Ctx) -> Check:
+    if slots.get("partial_text") and removes_some_items(
+        the_order(found, ctx), slots["partial_text"]
+    ):
+        return Denial("remove_items_not_allowed")
+    return Found()
 
 
 def _merge_changes(existing: list[dict], new: list) -> list[dict]:
@@ -77,8 +140,10 @@ class SwapItems:
         self.fn = fn
         self.reminder = reminder
         self.verb = verb
+        whole = [("check_whole_order", check_whole_order)] if name == "modify_order_items" else []
         self.steps = (
             *order_steps(name),
+            *whole,
             ("find_items", self.find_items),
             ("choose_new_options", self.choose_new_options),
             ("choose_payment_method", self.choose_payment_method),
@@ -86,9 +151,10 @@ class SwapItems:
         )
 
     def merge(self, slots, turn, text, ctx):
-        slots = dict(merge_order_id(slots, turn, text))
-        if turn.changes:
-            slots["changes"] = _merge_changes(slots.get("changes") or [], turn.changes)
+        slots = note_partial(dict(merge_order_id(slots, turn, text)), text)
+        changes = [c for c in turn.changes if said_by_customer(c.item.product, text)]
+        if changes:
+            slots["changes"] = _merge_changes(slots.get("changes") or [], changes)
         if turn.payment:
             slots["payment"] = turn.payment.model_dump()
             slots["payment_method_id"] = None

@@ -11,6 +11,7 @@ from customer_workflow_agent.graph.subgraphs.base import (
     summary,
     the_order,
 )
+from customer_workflow_agent.graph.subgraphs.swap_items import check_whole_order, note_partial
 from customer_workflow_agent.llm.schemas import CancelTurn
 from customer_workflow_agent.policy.rules import check_cancel_reason
 from customer_workflow_agent.resolve.ids import literal_in
@@ -72,11 +73,12 @@ class CancelOrder:
     needs_approval_step = False
     steps = (
         *order_steps("cancel_order"),
+        ("check_whole_order", check_whole_order),
         ("check_reason", check_reason),
     )
 
     def merge(self, slots, turn, text, ctx):
-        slots = merge_order_id(slots, turn, text)
+        slots = note_partial(merge_order_id(slots, turn, text), text)
         if gave_reason(turn.reason, turn.reason_quote, text):  # else check_reason asks
             slots = {**slots, "reason": turn.reason}
         return slots

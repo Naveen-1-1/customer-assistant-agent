@@ -59,10 +59,11 @@ def order_total(order: Order) -> float:
     return round(sum(i.price for i in order.items), 2)
 
 
-def order_summary_line(order: Order) -> str:
-    n = len(order.items)
-    items = f"{n} item{'s' if n != 1 else ''}"
-    return f"{order.order_id} — {order.status}, {items}, {usd(order_total(order))}"
+def order_summary_line(order: Order, show: int = 8) -> str:
+    """An order in a pick list, with what's in it, so the customer can tell which one they mean."""
+    names = [i.name for i in order.items]
+    items = ", ".join(names[:show]) + (f" +{len(names) - show} more" if len(names) > show else "")
+    return f"{order.order_id} — {order.status}: {items} ({usd(order_total(order))})"
 
 
 def numbered(lines: Sequence[str]) -> str:

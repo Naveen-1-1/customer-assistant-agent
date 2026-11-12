@@ -1,0 +1,245 @@
+"""Run τ²-bench tasks with the simulated customer against the baseline and/or the workflow.
+
+    python -m customer_workflow_agent.evalkit.run --agents baseline,workflow --cases 0,59,82 \
+        --model nvidia/nemotron-3.5-bolt-e4b --user-model nvidia/nemotron-3.5-lightning-30b-a3b
+
+Each conversation starts from a fresh copy of the store and is written to
+`var/eval/<run>/<case>__<agent>__t<k>.jsonl` (one event per line, then a summary line), with one
+LangSmith thread per conversation when tracing is on. The summary says whether the store ended
+where τ²-bench's expected actions leave it, and which writes the agent made.
+"""
+
+import argparse
+import asyncio
+import csv
+import json
+import time
+import traceback
+import uuid
+from datetime import datetime
+from functools import cache
+from pathlib import Path
+
+from langchain_core.rate_limiters import InMemoryRateLimiter
+
+from customer_workflow_agent.baseline.agent import FIRST_MESSAGE, BaselineAgent
+from customer_workflow_agent.baseline.llm import InfraError
+from customer_workflow_agent.evalkit.replay import (
+    db_state,
+    expected_db,
+    load_db,
+    load_tasks,
+    write_actions,
+)
+from customer_workflow_agent.evalkit.simulator import CustomerSimulator, stop_reason
+from customer_workflow_agent.evalkit.workflow_adapter import WorkflowAgent
+from customer_workflow_agent.obs.tracing import Tracing
+from customer_workflow_agent.settings import Settings, get_settings
+from customer_workflow_agent.store import InMemoryBackend, RetailStore
+
+EVAL_PROJECT = "customer-workflow-agent-eval"
+
+
+@cache
+def expected_for(task_id: str) -> dict:
+    return expected_db(load_tasks()[task_id], load_db())
+
+
+def mismatch(final: dict, expected: dict) -> dict:
+    """Which orders and users differ from the expected end state."""
+    out = {}
+    for kind in ("orders", "users"):
+        keys = sorted(
+            k
+            for k in set(final[kind]) | set(expected[kind])
+            if final[kind].get(k) != expected[kind].get(k)
+        )
+        if keys:
+            out[kind] = keys
+    return out
+
+
+async def run_conversation(
+    task: dict,
+    agent_kind: str,
+    trial: int,
+    args: argparse.Namespace,
+    settings: Settings,
+    limiter: InMemoryRateLimiter,
+    tracing: Tracing,
+    out_dir: Path,
+) -> dict:
+    conv_id = f"{task['id']}-{agent_kind}-t{trial}-{uuid.uuid4().hex[:6]}"
+    store = RetailStore(InMemoryBackend(load_db()))
+    events: list[dict] = []
+    started = time.monotonic()
+
+    def log(kind: str, **data) -> None:
+        events.append({"type": kind, "t": round(time.monotonic() - started, 2), **data})
+
+    meta = {
+        "task_id": task["id"],
+        "agent": agent_kind,
+        "model": args.model,
+        "user_model": args.user_model,
+        "trial": trial,
+    }
+    log("meta", conv_id=conv_id, **meta)
+    sim = CustomerSimulator(task, settings, limiter, args.user_model)
+    status, termination, agent = "ok", "max_turns", None
+    try:
+        with tracing.chat(conv_id, metadata=meta, project=EVAL_PROJECT):
+            if agent_kind == "baseline":
+                agent = BaselineAgent(store, settings, limiter, args.model)
+                agent_text = FIRST_MESSAGE
+            else:
+                agent = WorkflowAgent(store, settings, limiter, args.model, conv_id)
+                agent_text = await agent.start()
+            log("agent", text=agent_text)
+            seen_calls = 0
+            for _ in range(args.max_turns):
+                customer = await sim.next_message(agent_text)
+                log("customer", text=customer)
+                reason = stop_reason(customer)
+                said = customer.replace(reason, "").strip() if reason else customer
+                # A simulated customer sometimes says "Yes, please proceed ###STOP###" in one
+                # message. τ²-bench ends there; we let the agent act on that last message first,
+                # the same for both agents, so the run isn't lost to the simulator's timing.
+                if reason and not (reason == "###STOP###" and len(said.split()) >= 3):
+                    termination = reason
+                    break
+                popups_before = len(getattr(agent, "popups", []))
+                agent_text, stuck = await agent.reply(said)
+                if agent_kind == "baseline":
+                    for c in agent.tools.calls[seen_calls:]:
+                        log(
+                            "tool",
+                            name=c.name,
+                            arguments=c.arguments,
+                            result=c.result[:2000],
+                            error=c.error,
+                            write=c.write,
+                        )
+                    seen_calls = len(agent.tools.calls)
+                else:
+                    for p in agent.popups[popups_before:]:
+                        log("popup", **p)
+                log("agent", text=agent_text)
+                if reason:
+                    termination = f"{reason} (after acting on last message)"
+                    break
+                if stuck:
+                    termination = "agent_step_cap"
+                    break
+                if agent_kind == "workflow" and agent.ended:
+                    termination = "agent_ended"
+                    break
+    except InfraError as e:
+        status = "infra_error"
+        log("error", error=str(e))
+    except Exception as e:  # a crash in our code or the agent: keep the transcript for review
+        status = "crash"
+        log("error", error=f"{type(e).__name__}: {e}", traceback=traceback.format_exc())
+
+    final = db_state(store)
+    expected = expected_for(task["id"])
+    writes = [
+        {"op": r.op, "target": r.target_id}
+        for r in store._db.ledger.values()
+        if r.op != "block_returns"
+    ]
+    summary = {
+        "type": "summary",
+        **meta,
+        "conv_id": conv_id,
+        "status": status,
+        "termination": termination,
+        "end_state_match": final == expected,
+        "mismatch": mismatch(final, expected),
+        "writes": writes,
+        "expected_writes": [{"op": a["name"], "args": a["arguments"]} for a in write_actions(task)],
+        "customer_turns": sum(1 for e in events if e["type"] == "customer"),
+        "llm_calls_agent": getattr(agent, "llm_calls", None),
+        "llm_calls_customer": sim.llm_calls,
+        "seconds": round(time.monotonic() - started, 1),
+    }
+    path = out_dir / f"{task['id']}__{agent_kind}__t{trial}.jsonl"
+    path.write_text("\n".join(json.dumps(e, default=str) for e in [*events, summary]) + "\n")
+    return summary
+
+
+async def main(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    limiter = InMemoryRateLimiter(
+        requests_per_second=args.rpm / 60, check_every_n_seconds=0.1, max_bucket_size=4
+    )
+    tracing = Tracing(settings)
+    run = args.run or datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = settings.var_dir / "eval" / run
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tasks = load_tasks()
+    jobs = [
+        (tasks[c], a, t)
+        for c in args.cases.split(",")
+        for a in args.agents.split(",")
+        for t in range(1, args.trials + 1)
+    ]
+    sem = asyncio.Semaphore(args.concurrency)
+
+    async def one(task, agent_kind, trial):
+        async with sem:
+            s = await run_conversation(
+                task, agent_kind, trial, args, settings, limiter, tracing, out_dir
+            )
+            if s["status"] == "infra_error" and args.retry_infra:
+                s = await run_conversation(
+                    task, agent_kind, trial, args, settings, limiter, tracing, out_dir
+                )
+            print(
+                f"task {s['task_id']:>4} {s['agent']:<8} t{s['trial']} {s['status']:<11} "
+                f"{s['termination']:<16} match={s['end_state_match']!s:<5} "
+                f"turns={s['customer_turns']:<3} {s['seconds']}s "
+                f"writes={[w['op'] for w in s['writes']]}",
+                flush=True,
+            )
+            return s
+
+    summaries = await asyncio.gather(*(one(*j) for j in jobs))
+    tracing.flush()
+    with (out_dir / "summary.csv").open("w", newline="") as f:
+        cols = [
+            "task_id",
+            "agent",
+            "trial",
+            "status",
+            "termination",
+            "end_state_match",
+            "customer_turns",
+            "seconds",
+            "conv_id",
+        ]
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(summaries)
+    print(f"\nwrote {len(summaries)} conversations to {out_dir}")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument("--cases", required=True, help="comma-separated τ²-bench task ids")
+    p.add_argument("--agents", default="baseline,workflow")
+    p.add_argument("--model", required=True, help="NIM model id for the agent (both agents)")
+    p.add_argument("--user-model", required=True, help="NIM model id for the simulated customer")
+    p.add_argument("--trials", type=int, default=1)
+    p.add_argument("--concurrency", type=int, default=3)
+    p.add_argument("--rpm", type=float, default=35, help="requests per minute across all calls")
+    p.add_argument("--max-turns", type=int, default=30, help="customer messages per conversation")
+    p.add_argument("--retry-infra", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--run", help="run name (default: timestamp)")
+    return p.parse_args(argv)
+
+
+if __name__ == "__main__":
+    asyncio.run(main(parse_args()))

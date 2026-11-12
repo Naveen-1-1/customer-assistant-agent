@@ -75,9 +75,10 @@ def test_resolve_lines_and_variants():
     assert resolve_lines(order, {"product": "mug", "options": []}).status == "none"
     # The live model sometimes lists option names instead of values: they don't narrow it down.
     assert resolve_lines(order, {"product": "tshirt", "options": ["size", "color"]}).lines == [0]
-    assert resolve_lines(order, {"product": "tshirt", "options": ["size", "purple"]}).status == (
-        "none"
-    )
+    # Options the line doesn't have (often the ones the customer wants) don't hide it: the product
+    # name decides (τ²-bench tasks 2 and 71: "the backpack → grey, medium" on a navy, small one).
+    assert resolve_lines(order, {"product": "tshirt", "options": ["size", "purple"]}).lines == [0]
+    assert resolve_lines(order, {"product": "mug", "options": ["purple"]}).status == "none"
     product = db.products["6086499569"]
     line: OrderItem = order.items[0]
     assert (
@@ -87,6 +88,19 @@ def test_resolve_lines_and_variants():
     assert resolve_variant(product, line, [{"name": "size", "value": "l"}]).item_id == "1008292231"
     assert resolve_variant(product, line, [{"name": "size", "value": "M"}]).status == "same"
     assert resolve_variant(product, line, []).status == "need_desired"
+    # A model's placeholder ("yes", "null") is not an option the customer stated.
+    filler = [{"name": "color", "value": "yes"}, {"name": None, "value": "null"}]
+    assert resolve_variant(product, line, filler).status == "need_desired"
+    with_filler = [*filler, {"name": "size", "value": "l"}]
+    assert resolve_variant(product, line, with_filler).item_id == "1008292231"
+
+
+def test_none_is_kept_when_it_is_a_real_option(real_db):
+    """A keyboard's backlight really can be "none" (τ²-bench task 0)."""
+    product = real_db.products["1656367028"]
+    line = real_db.orders["#W2378156"].items[2]  # linear, RGB, full size
+    desired = [{"name": "switch type", "value": "clicky"}, {"name": "backlight", "value": "none"}]
+    assert resolve_variant(product, line, desired).item_id == "7706410293"
 
 
 @pytest.mark.parametrize("value", ["compatibility: Apple HomeKit", ".compatibility: Apple HomeKit"])
