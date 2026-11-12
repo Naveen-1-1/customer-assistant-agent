@@ -3,10 +3,9 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "customer-workflow-agent"
+name = "customer-assistant-agent"
 version = "0.1.0"
-description = "Customer-service workflow agent (LangGraph) on the τ²-bench retail store"
-readme = "README.md"
+description = "Baseline agent and evaluation harness on the τ²-bench retail store"
 requires-python = ">=3.13"
 license = "MIT"
 dependencies = [
@@ -36,7 +35,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/customer_workflow_agent"]
+packages = ["agent"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -55,11 +54,11 @@ filterwarnings = [
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-src = ["src", "tests"]
+src = ["."]
 
 [tool.ruff.lint.per-file-ignores]
 # τ²-bench's simulator guidelines, kept word for word.
-"src/customer_workflow_agent/evalkit/simulator.py" = ["E501"]
+"agent/evaluation/simulated_customer.py" = ["E501"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
