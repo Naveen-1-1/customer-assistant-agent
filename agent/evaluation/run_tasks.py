@@ -124,6 +124,38 @@ async def run_conversation(
         status = "crash"
         log("error", error=f"{type(e).__name__}: {e}", traceback=traceback.format_exc())
 
+    summary = build_summary(
+        task,
+        meta,
+        conv_id,
+        status,
+        termination,
+        store,
+        events,
+        llm_calls_agent=getattr(agent, "llm_calls", None),
+        llm_calls_customer=sim.llm_calls,
+        seconds=time.monotonic() - started,
+    )
+    path = out_dir / f"{task['id']}__{agent_kind}__t{trial}.jsonl"
+    path.write_text("\n".join(json.dumps(e, default=str) for e in [*events, summary]) + "\n")
+    return summary
+
+
+def build_summary(
+    task: dict,
+    meta: dict,
+    conv_id: str,
+    status: str,
+    termination: str,
+    store: RetailStore,
+    events: list[dict],
+    *,
+    llm_calls_agent: int | None,
+    llm_calls_customer: int | None,
+    seconds: float,
+) -> dict:
+    """The last line of a conversation log: how it ended and where the store ended up. Shared
+    by simulated runs and by the human-testing UI, so both logs grade the same way."""
     final = db_state(store)
     expected = expected_for(task["id"])
     writes = [
@@ -131,7 +163,7 @@ async def run_conversation(
         for r in store._db.ledger.values()
         if r.op != "block_returns"
     ]
-    summary = {
+    return {
         "type": "summary",
         **meta,
         "conv_id": conv_id,
@@ -142,13 +174,10 @@ async def run_conversation(
         "writes": writes,
         "expected_writes": [{"op": a["name"], "args": a["arguments"]} for a in write_actions(task)],
         "customer_turns": sum(1 for e in events if e["type"] == "customer"),
-        "llm_calls_agent": getattr(agent, "llm_calls", None),
-        "llm_calls_customer": sim.llm_calls,
-        "seconds": round(time.monotonic() - started, 1),
+        "llm_calls_agent": llm_calls_agent,
+        "llm_calls_customer": llm_calls_customer,
+        "seconds": round(seconds, 1),
     }
-    path = out_dir / f"{task['id']}__{agent_kind}__t{trial}.jsonl"
-    path.write_text("\n".join(json.dumps(e, default=str) for e in [*events, summary]) + "\n")
-    return summary
 
 
 async def main(args: argparse.Namespace) -> None:
@@ -156,7 +185,7 @@ async def main(args: argparse.Namespace) -> None:
     limiter = InMemoryRateLimiter(
         requests_per_second=args.rpm / 60, check_every_n_seconds=0.1, max_bucket_size=4
     )
-    run =args.run or datetime.now().strftime("%Y%m%d-%H%M%S")
+    run = args.run or datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = settings.var_dir / "eval" / run
     out_dir.mkdir(parents=True, exist_ok=True)
     tasks = load_tasks()

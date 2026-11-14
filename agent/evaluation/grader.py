@@ -106,15 +106,18 @@ REVIEW_ENDINGS = ("###TRANSFER###", "###OUT-OF-SCOPE###", "max_turns", "agent_st
 
 ORDER_ID = re.compile(r"#?\b(W\d{7})\b", re.IGNORECASE)
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
-ZIP = re.compile(r"(?<![\d.$,])\b\d{5}\b(?![\d.,])")
+# a 5-digit zip, not part of a price or a longer number ("NY 10022." still counts)
+ZIP = re.compile(r"(?<![\d.$,])\b\d{5}\b(?![\d,]|\.\d)")
 TRACKING = re.compile(r"\b\d{12}\b")
 MONEY = re.compile(r"\$\s?(\d[\d,]*(?:\.\d{1,2})?)")
 NUMBER = re.compile(r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)(?![\w])")
 INTERNAL_ID = re.compile(r"\b(?:credit_card|paypal|gift_card)_\d+\b")
 # A yes: an affirmative word in the reply's opening, after at most a few filler words
-# ("Oh... um, yes"), with no hesitation before it ("Oh wait, let me reconsider").
+# ("Oh... um, yes"), stutters allowed ("Y-yes", "O-okay"), with no hesitation before it
+# ("Oh wait, let me reconsider").
 AFFIRMATIVE = re.compile(
-    r"^\W*((oh|um+|uh+|well|great|perfect|thanks|thank you|alright|ah|hmm+|okay so)\W+){0,3}"
+    r"^\W*((oh|um+|uh+|well|great|perfect|thanks|thank you|alright|ah|hmm+|okay so|o-okay)\W+)"
+    r"{0,4}(\w-)?"
     r"(yes|yeah|yep|yup|sure|ok|okay|confirm(ed)?|correct|that'?s (right|correct)|"
     r"go ahead|proceed|please (do|proceed|go ahead)|absolutely|definitely|sounds good)\b",
     re.IGNORECASE,
@@ -428,9 +431,14 @@ def _unconfirmed(r: Run) -> list[str]:
 
 
 def _named(name: str, text: str) -> bool:
-    """A product counts as named if any word of its name (4+ letters) appears: 'camera' for
-    'Digital Camera'."""
-    return any(w in text for w in re.split(r"[^a-z]+", name.lower()) if len(w) >= 4)
+    """A product counts as named if its name, or any word of it with 4+ letters, appears:
+    'camera' for 'Digital Camera'. Short names ('Pet Bed') need the whole name or its last
+    word as a word ('bed')."""
+    low = name.lower()
+    words = re.split(r"[^a-z]+", low)
+    if low in text or any(w in text for w in words if len(w) >= 4):
+        return True
+    return bool(words and words[-1] and re.search(rf"\b{re.escape(words[-1])}s?\b", text))
 
 
 @check(
@@ -1228,6 +1236,25 @@ def _infra(r: Run) -> list[str]:
     return [str(e.get("error"))[:100] for e in r.errors]
 
 
+@check(
+    "customer_stuck",
+    "validity",
+    "validity",
+    "",
+    "The simulated customer sent the same message (of 6+ words; a repeated 'Yes.' is fine) "
+    "three or more times in a row, so the conversation couldn't move forward.",
+)
+def _customer_stuck(r: Run) -> list[str]:
+    out, streak = [], 1
+    texts = [t.strip() for t in r.customer_texts]
+    for i in range(1, len(texts)):
+        long_enough = len(texts[i].split()) >= 6
+        streak = streak + 1 if long_enough and texts[i] == texts[i - 1] else 1
+        if streak == 3:
+            out.append(f"message {i + 1}: {texts[i][:60]!r}")
+    return out
+
+
 # --- putting it together ---------------------------------------------------------------------
 
 
@@ -1299,6 +1326,8 @@ def grade(task: dict, events: list[dict], final_state: dict | None = None) -> di
         review.append(
             "simulated customer went off script: " + "; ".join(findings["customer_invented_detail"])
         )
+    if findings["customer_stuck"]:
+        review.append("simulated customer stuck repeating itself: " + findings["customer_stuck"][0])
     if verdict not in ("correct", "excluded"):
         review.append("failed: check the simulated customer stayed on its script")
 
