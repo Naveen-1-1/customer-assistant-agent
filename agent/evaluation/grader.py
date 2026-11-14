@@ -438,6 +438,9 @@ def _named(name: str, text: str) -> bool:
     words = re.split(r"[^a-z]+", low)
     if low in text or any(w in text for w in words if len(w) >= 4):
         return True
+    # a shorter everyday word for a compound name: "watch" for "Wristwatch"
+    if any(t in w for w in words for t in re.findall(r"[a-z]{5,}", text) if len(w) > len(t)):
+        return True
     return bool(words and words[-1] and re.search(rf"\b{re.escape(words[-1])}s?\b", text))
 
 
@@ -683,7 +686,7 @@ def _options(r: Run) -> list[str]:
             t["arguments"].get("item_ids", []), t["arguments"].get("new_item_ids", []), strict=False
         ):
             old, new = items.get(old_id), variant(new_id)
-            if not old or not new:
+            if not old or not new or new_id in said:  # the customer named the exact new item
                 continue
             for k, v in new[1]["options"].items():
                 if old["options"].get(k) == v:
@@ -799,7 +802,8 @@ def _not_in_orders(r: Run) -> list[str]:
     out = []
     for text in r.agent_texts:
         for s in sentences(text):
-            if NOT_IN_ORDERS.search(s):
+            # "item ID 1656367028 is not found in your order" is about an id, not the item
+            if NOT_IN_ORDERS.search(s) and not re.search(r"\b\d{10}\b", s):
                 out += [
                     f"{n!r} is in their orders"
                     for n in product_names()
@@ -866,6 +870,12 @@ def _supported_amounts(r: Run) -> list[float]:
                 diffs.append(round(v - i["price"], 2))
     seen |= {abs(d) for d in diffs}
     seen |= {abs(round(a + b, 2)) for a in diffs[:200] for b in diffs[:200]}
+    # totals across orders ("$1,186.47 + $236.57 = $1,423.04 for both returns"): sums of any
+    # set of whole-order totals
+    totals = [round(sum(i["price"] for i in order(oid).get("items", [])), 2) for oid in orders]
+    totals = [t for t in totals if t][:12]
+    for mask in range(1, 2 ** len(totals)):
+        seen.add(round(sum(t for i, t in enumerate(totals) if mask >> i & 1), 2))
     for m in (r.user_record.get("payment_methods") or {}).values():
         if "balance" in m:
             seen.add(m["balance"])
