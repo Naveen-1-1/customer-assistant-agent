@@ -3,23 +3,11 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-.pytest_cache/
 .ruff_cache/
-.coverage
-htmlcov/
-build/
-dist/
 
-# Secrets and runtime data
+# Secrets and local run output
 .env
 var/
-
-# Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/coverage/
-*.tsbuildinfo
-.npm-cache/
 
 # IDE / OS
 .idea/
@@ -27,10 +15,7 @@ frontend/coverage/
 .DS_Store
 
 # Claude local files
-.claude/settings.local.json
-.claude/.cc-writes/
+.claude/
 
 # Local notes
-ISSUES.md
-
 notes/

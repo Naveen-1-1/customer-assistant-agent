@@ -20,7 +20,6 @@ StoreErrorCode = Literal[
     "refund_method_not_allowed",
     "payment_history_not_single",
     "same_payment_method",
-    "returns_blocked",
 ]
 
 

@@ -8,13 +8,12 @@ The page itself lives in `agent/ui/frontend/` and is served as static files.
 
 Each session gets a fresh store. The person talks to the agent exactly as the simulated customer
 does: their message goes to `BaselineAgent.reply`, and the agent's reply comes back. When the
-session ends, its log is written in the same format as simulated runs (`meta`, `agent`,
-`customer`, `tool`, `summary` events), with `"mode": "human"`, to
-`var/eval/human-<date>/<task>__baseline__h<k>.jsonl`, and the folder is graded.
+session ends, it writes the same run folder as a simulated run (`trajectory.json`,
+`reward.json`, `config.json`, with mode "human") to
+`var/eval/user-testing-<date>/case-<task>/runs/run-<n>/`.
 """
 
 import argparse
-import json
 import time
 import traceback
 import uuid
@@ -30,8 +29,9 @@ from pydantic import BaseModel
 
 from agent.baseline.agent import FIRST_MESSAGE, BaselineAgent
 from agent.baseline.model_client import InfraError
-from agent.evaluation.grader import grade_run_dir, load_db, load_tasks
-from agent.evaluation.run_tasks import build_summary
+from agent.evaluation.grader import db_state, load_db, load_tasks
+from agent.evaluation.outputs import next_run_numbers, notes, run_folder, write_run
+from agent.evaluation.run_tasks import summary_event
 from agent.settings import get_settings
 from agent.store import InMemoryBackend, RetailStore
 
@@ -87,32 +87,28 @@ class Session:
         return calls
 
     def finish(self, termination: str) -> dict:
-        """Write the log and grade it. Returns the grade summary for the page."""
+        """Write the run folder (grading it). Returns the grade summary for the page."""
         self.ended = True
-        summary = build_summary(
-            self.task,
-            self.meta,
-            self.conv_id,
-            self.status,
-            termination,
-            self.store,
-            self.events,
-            llm_calls_agent=self.agent.llm_calls,
-            llm_calls_customer=None,
-            seconds=time.monotonic() - self.started,
+        self.events.append(
+            summary_event(
+                self.status,
+                termination,
+                llm_calls_agent=self.agent.llm_calls,
+                llm_calls_customer=0,
+                seconds=time.monotonic() - self.started,
+            )
         )
-        out_dir = settings.var_dir / "eval" / f"human-{datetime.now():%Y%m%d}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        k = 1 + len(list(out_dir.glob(f"{self.task['id']}__baseline__h*.jsonl")))
-        path = out_dir / f"{self.task['id']}__baseline__h{k}.jsonl"
-        lines = [json.dumps(e, default=str) for e in [*self.events, summary]]
-        path.write_text("\n".join(lines) + "\n")
-        graded = {r["file"]: r for r in grade_run_dir(out_dir)}.get(path.name)
+        out = settings.var_dir / "eval" / f"user-testing-{datetime.now():%Y%m%d}"
+        task_id = self.task["id"]
+        n = next_run_numbers(out, task_id, 1)[0]
+        self.events[0]["trial"] = n
+        folder = run_folder(out, task_id, n)
+        g = write_run(folder, self.task, self.events, db_state(self.store))
         return {
-            "log": str(path),
-            "end_state_match": summary["end_state_match"],
-            "verdict": graded["verdict"] if graded else "not graded (no tool calls)",
-            "notes": graded["notes"] if graded else "",
+            "log": str(folder),  # shown as "Run folder" on the page
+            "end_state_match": bool(g["end_state_match"]),
+            "verdict": g["verdict"],
+            "notes": notes(g),
         }
 
 

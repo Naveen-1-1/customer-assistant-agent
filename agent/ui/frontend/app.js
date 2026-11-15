@@ -92,7 +92,7 @@ $("end").addEventListener("click", async () => {
     `Verdict: ${r.verdict}`,
     `End state matches τ²-bench: ${r.end_state_match}`,
     r.notes ? `Notes: ${r.notes}` : "",
-    `Log: ${r.log}`,
+    `Run folder: ${r.log}`,
   ].filter(Boolean).forEach((line) => {
     const p = document.createElement("div");
     p.className = "small";

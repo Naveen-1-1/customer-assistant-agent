@@ -9,12 +9,11 @@ Research). Differences from the original:
   it now refunds the net amount paid per payment method.
 - Tightened to match the policy: address/payment changes need status exactly "pending";
   exchanges need a different item; item lists must be non-empty.
-- Added: an op-id ledger (a repeated write is not applied twice), a transfer log,
-  and orders blocked from further returns.
+- Added: an op-id ledger (a repeated write is not applied twice) and a transfer log.
 - `calculate` is not ported (code does the math).
 
 Writes validate everything before changing anything. They run under one lock, mutate the
-in-memory copy, and save the working copy; if anything raises, the last saved copy is reloaded.
+in-memory copy, and save it; if anything raises, the last saved copy is reloaded.
 """
 
 import threading
@@ -182,15 +181,6 @@ class RetailStore:
         with self._lock:
             return self._order(self._db, order_id).model_copy(deep=True)
 
-    def get_user_orders(self, user_id: str) -> list[Order]:
-        with self._lock:
-            user = self._user(self._db, user_id)
-            return [
-                self._db.orders[oid].model_copy(deep=True)
-                for oid in user.orders
-                if oid in self._db.orders
-            ]
-
     def get_product(self, product_id: str) -> Product:
         with self._lock:
             return self._product(self._db, product_id).model_copy(deep=True)
@@ -206,14 +196,6 @@ class RetailStore:
     def list_all_product_types(self) -> dict[str, str]:
         with self._lock:
             return dict(sorted((p.name, p.product_id) for p in self._db.products.values()))
-
-    def returns_blocked(self, order_id: str) -> bool:
-        with self._lock:
-            return order_id in self._db.return_blocked_orders
-
-    def transfers(self) -> list[TransferRecord]:
-        with self._lock:
-            return [t.model_copy() for t in self._db.transfers]
 
     # ---- writes ------------------------------------------------------------------------
 
@@ -351,8 +333,6 @@ class RetailStore:
             order = self._order(db, order_id)
             if done:
                 return order.model_copy(deep=True)
-            if order_id in db.return_blocked_orders:
-                raise StoreError("returns_blocked", "Returns on this order are blocked")
             self._require_status(order, "delivered", "returned")
             pm = self._payment_method(db, order.user_id, payment_method_id)
             if (
@@ -411,17 +391,3 @@ class RetailStore:
             if not done:
                 db.transfers.append(TransferRecord(op_id=op_id, user_id=user_id, summary=summary))
             return "Transfer successful"
-
-    def block_returns(self, order_id: str, *, op_id: str) -> None:
-        """Block further returns on an order (after a supervisor rejected one)."""
-        with self._write(op_id, "block_returns", order_id) as (db, done):
-            self._order(db, order_id)
-            if not done and order_id not in db.return_blocked_orders:
-                db.return_blocked_orders.append(order_id)
-
-    # ---- admin -------------------------------------------------------------------------
-
-    def reset(self) -> None:
-        """Restore the working copy to the original data."""
-        with self._lock:
-            self._db = self._backend.reset()

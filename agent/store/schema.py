@@ -154,4 +154,3 @@ class WorkingDB(RetailDB):
 
     ledger: dict[str, OpRecord] = Field(default_factory=dict)
     transfers: list[TransferRecord] = Field(default_factory=list)
-    return_blocked_orders: list[str] = Field(default_factory=list)

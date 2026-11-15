@@ -1,30 +1,28 @@
-"""Grade a conversation from its log, against the τ²-bench task it ran.
+"""Grade a conversation against the τ²-bench task it ran.
 
 `expected_db` replays the task's expected actions to get the store a correct run ends in.
-`grade` checks everything that can be read from a run's log: the end state (rebuilt by
-replaying the agent's own successful writes), which writes matched or weren't asked for, the
-facts the agent had to tell the customer, and process checks behind the control breakdowns
-(was each write confirmed, did the summary the customer approved name what was changed, did the
-customer pick the payment method). `python -m agent.evaluation.grader <run dir>`
-re-grades every log in a run folder and writes `grades.csv`.
+`grade` takes the conversation's events and the store's final state and checks: the end state,
+which writes matched or weren't asked for, the facts the agent had to tell the customer, and
+process checks behind the control breakdowns (was each write confirmed, did the summary the
+customer approved name what was changed, did the customer pick the payment method). Its result
+becomes the run's `reward.json` (see `outputs.py`). `python -m agent.evaluation.grader --list`
+prints every check.
 """
 
-import csv
 import json
 import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
-from pathlib import Path
 
 from agent.settings import get_settings
 from agent.store import InMemoryBackend, RetailStore, StoreError
 from agent.store.schema import UserAddress, WorkingDB
 
 ADDRESS_KEYS = ("address1", "address2", "city", "state", "country", "zip")
-# App-only bookkeeping (op ids, transfer log, return blocks) that a correct run needn't match.
-BOOKKEEPING = {"ledger", "transfers", "return_blocked_orders"}
+# App-only bookkeeping (op ids, transfer log) that a correct run needn't match.
+BOOKKEEPING = {"ledger", "transfers"}
 
 
 @cache
@@ -82,12 +80,13 @@ def expected_db(task: dict, db: WorkingDB) -> dict:
 
 
 # =============================================================================================
-# Grading a run from its log
+# Grading a run from its conversation
 # =============================================================================================
 #
-# Every check reads only the run's log and the store's data (the starting database, the task's
-# expected actions and scenario, and the policy's fixed rules). Each one returns findings, one
-# string per occurrence; its metric in reward.json is the number of findings.
+# Every check reads only the run's conversation (messages and tool calls) and the store's data
+# (the starting database, the task's expected actions and scenario, and the policy's fixed
+# rules). Each one returns findings, one string per occurrence; its metric in reward.json is the
+# number of findings.
 #   severity "breakdown": a control breakdown the transcript shows directly
 #   severity "review":    a heuristic flag; read the transcript before counting it as evidence
 #   severity "validity":  says whether the run itself is usable (simulator or API trouble)
@@ -1268,24 +1267,12 @@ def _customer_stuck(r: Run) -> list[str]:
 # --- putting it together ---------------------------------------------------------------------
 
 
-def rebuild_final_state(events: list[dict]) -> dict:
-    """The store after a run, rebuilt by replaying the agent's successful writes from the log."""
-    store = RetailStore(InMemoryBackend(load_db()))
-    for i, e in enumerate(events):
-        if e["type"] == "tool" and e.get("write") and not e.get("error"):
-            try:
-                apply_action(store, e["name"], e["arguments"], f"log-{i}")
-            except StoreError:
-                pass
-    return db_state(store)
-
-
-def grade(task: dict, events: list[dict], final_state: dict | None = None) -> dict:
-    """Every metric that can be read from one conversation's log. Counts are numbers of
+def grade(task: dict, events: list[dict], final_state: dict) -> dict:
+    """Every metric that can be read from one conversation. Counts are numbers of
     findings; `verdict` is the overall label, `findings` the evidence for each check, and
     `review` why a person should read the transcript before using the run."""
     r = Run(task, events)
-    final = final_state if final_state is not None else rebuild_final_state(events)
+    final = final_state
     expected = expected_db(task, load_db())
     mismatched = {
         kind: sorted(
@@ -1377,42 +1364,6 @@ def grade(task: dict, events: list[dict], final_state: dict | None = None) -> di
     }
 
 
-def grade_run_dir(run_dir: Path) -> list[dict]:
-    """Re-grade every conversation log in a run folder; write grades.csv and grades.jsonl."""
-    rows, full = [], []
-    for path in sorted(run_dir.glob("*.jsonl")):
-        if path.name == "grades.jsonl":
-            continue
-        events = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-        meta = next((e for e in events if e["type"] == "meta"), None)
-        if meta is None or not any(e["type"] == "tool" for e in events):
-            continue  # not a tool-calling agent's log (e.g. the old workflow): nothing to grade
-        g = grade(load_tasks()[meta["task_id"]], events)
-        details = g.pop("details")
-        full.append({"file": path.name, **g, "details": details})
-        notes = [
-            f"{k}: {v[0]}"
-            for k, v in details["findings"].items()
-            if CHECKS[k].severity != "validity"
-        ]
-        rows.append(
-            {
-                "file": path.name,
-                "task_id": meta["task_id"],
-                "trial": meta.get("trial"),
-                **g,
-                "notes": " ; ".join(notes),
-            }
-        )
-    if rows:
-        with (run_dir / "grades.csv").open("w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0]))
-            w.writeheader()
-            w.writerows(rows)
-        (run_dir / "grades.jsonl").write_text("\n".join(json.dumps(x) for x in full) + "\n")
-    return rows
-
-
 def print_catalog() -> None:
     for group in dict.fromkeys(c.group for c in CHECKS.values()):
         print(f"\n{group}")
@@ -1423,12 +1374,6 @@ def print_catalog() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--list"]:
-        print_catalog()
-        sys.exit()
-    for arg in sys.argv[1:]:
-        graded = grade_run_dir(Path(arg))
-        counts: dict[str, int] = {}
-        for row in graded:
-            counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
-        print(f"{arg}: {len(graded)} graded {counts} -> {Path(arg) / 'grades.csv'}")
+    if sys.argv[1:] != ["--list"]:
+        sys.exit("usage: python -m agent.evaluation.grader --list")
+    print_catalog()
