@@ -7,7 +7,7 @@ Replace `<TASK_ID>` with the test case to run (19, 37 or 67).
 You are helping me run test case <TASK_ID> (τ²-bench retail task) 5 times against the baseline agent, in the repo I just cloned (customer-assistant-agent). Fresh machine: nothing is installed yet.
 
 SETUP
-1. Check out the branch `test-cases/submission`.
+1. Check out the branch `test-cases/execution`.
 2. Make sure Python 3.13+ is available (install it if missing). Create `.venv` in the repo root and run `pip install -e .` inside it.
 3. Copy `.env.example` to `.env`. Do NOT ask me to paste my API key into chat. Tell me to open `.env` myself and set `NVIDIA_API_KEY=` to my key from https://build.nvidia.com/settings/api-keys, then wait until I say it's done.
 4. Start the user-testing UI with the launch config in `.claude/launch.json` ("user-testing-ui", i.e. `.venv/bin/python -m agent.ui.backend.server --port 8000`) and open http://localhost:8000 in the built-in browser pane so I can watch. Turn on "Show tool calls".

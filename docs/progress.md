@@ -1,6 +1,6 @@
 # Curated test cases: progress
 
-CS 6983 · Group 5 · branch `test-cases/submission` · updated 2026-11-14 · due **Mon 2026-11-16, 11:59 pm**
+CS 6983 · Group 5 · branch `test-cases/execution` · updated 2026-11-14 · due **Mon 2026-11-16, 11:59 pm**
 
 ## Setup
 
