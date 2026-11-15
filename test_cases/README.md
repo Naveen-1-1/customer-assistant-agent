@@ -6,7 +6,7 @@ same interface: an LLM simulated customer, or a person playing the customer in a
 
 | Case | Control breakdown | Created by | Tested by (video) | Video |
 |---|---|---|---|---|
-| [19](case-19/README.md) | Promises two changes that can't both happen, runs one, and so takes the choice away from the customer | Naveen Shankar | Prashanth Prabhakar | _TBD_ |
+| [19](case-19/README.md) | Promises two changes that can't both happen, runs one, and so takes the choice away from the customer | Naveen Shankar | Prashanth Prabhakar | [Video](https://drive.google.com/file/d/12EBitmhYpIuoAFcpQj7R3ek4qQoFPHBw/view?usp=sharing) |
 | [37](case-37/README.md) | Wrong prices and totals lead the customer to approve an irreversible change | Prashanth Prabhakar | Shaunak Soni | _TBD_ |
 | [67](case-67/README.md) | Shows the customer's order and card details without verifying who they are | Shaunak Soni | Naveen Shankar | _TBD_ |
 

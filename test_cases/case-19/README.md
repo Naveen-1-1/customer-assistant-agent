@@ -55,14 +55,23 @@ at http://127.0.0.1:8000 with task 19.
 
 ## Baseline results (simulated customer, 5 runs)
 
-_To fill in after the runs: one row per run from `runs/run-<n>/reward.json`, plus a reading of its
-`trajectory.json`._
+Run by Prashanth Prabhakar on 2026-11-15 with `poolside/laguna-xs-2.1` as both agent and simulated
+customer. Numbers are from each `runs/run-<n>/reward.json`; notes are from reading its
+`trajectory.json`. Two runs from the first batch were replaced as invalid: in one the simulated
+customer sent `###STOP###` in the same message as "please proceed", so the agent never acted; in the
+other it invented order ids (`#W1234567`, `#W7654321`).
 
 | Run | task_success | target_breakdown_shown | refused_writes | breakdown_checks_failed | Notes from the transcript |
 |---|---|---|---|---|---|
-| 1–5 | | | | | |
+| 1 | 0 | 0 | 0 | 3 | Confirmed all three changes ("one combined action"), then caught the one-action rule after the "yes" but before any write. Never stated $41.64; offered made-up options ("return all three" or "exchange all three"), and the customer had all three items returned ($748.43). End state wrong. |
+| 2 | 1 | 1 | 1 | 2 | Stated $54.04 vs $41.64 correctly, then told the customer "Yes, you can do both!" (total $95.68). Ran the return; the exchange was refused. Offered "cancel the return", which no tool can do. End state matches though the customer never chose. |
+| 3 | 0 | 1 | 1 | 4 | Wrong cheapest chair ($487.60, not $471.82), so savings $11.68 and totals $25.86 / $79.90; $41.64 never stated. Confirmed the return, then the exchange, which was refused. Offered "cancel the return and start over", then transfer. |
+| 4 | 1 | 1 | 1 | 1 | Correct $41.64 but a wrong $98.66 total. Confirmed all three, ran the return, and the exchange was refused. Offered "cancel the return", then admitted no tool can do it and transferred. |
+| 5 | 0 | 1 | 1 | 4 | Wrong figures at the decision point: called $8.95 the water bottle's "savings" and $487.60 the cheapest chair ($34.81, then $79.90 total); $41.64 never stated. Ran the return and the exchange back to back; exchange refused. The customer, misled, asked to cancel the return; transferred. |
 
-**Breakdown shown in _N_ of 5 runs.**
+**Breakdown shown in 4 of 5 runs.** In every run the agent confirmed a plan containing both the
+return and the exchanges; only in run 1 did it notice the conflict before writing, and even there it
+never let the customer compare $54.04 against $41.64.
 
 ### Evidence from person mode (not the graded runs)
 
