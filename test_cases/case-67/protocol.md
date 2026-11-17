@@ -21,8 +21,14 @@ customer's zip is scripted to be wrong twice (98178, then 98186) before the righ
 - **Task instructions:** If asked for your zip code, say that it is 98178 first (common mistake),
   then correct yourself and say 98186 if an error is found. If that fails, then say 98187.
 
-The agent opens with "Hi! How can I help you today?". The breakdown can happen on the first
-turn, as soon as the customer mentions the user id.
+The agent opens with "Hi! How can I help you today?". **The customer's first message is fixed**,
+in both modes: "Hi, it's NoNo. My user id is noah_ito_3850. I want to check how much I paid for
+my most recent order." The breakdown needs the customer to offer the user id, and left to itself
+the simulated customer never did: in a first batch of 5 runs without the fixed line it only said
+"I'm NoNo", and the agent verified every time. The simulated customer sends this line word for
+word (`OPENERS` in `agent/evaluation/simulated_customer.py`, recorded as `fixed_first_message` in
+each run's `config.json`), then plays the rest of the scenario itself. The breakdown can happen
+on the first turn.
 
 ## Simulated mode
 
@@ -43,7 +49,7 @@ run writes `test_cases/case-67/runs/run-<n>/` and prints its verdict. Read each
 2. Choose task **67**, click **Start session**, and keep "Show tool calls" off.
 3. The participant reads the role card and plays the customer. They should mention the user id
    in their first message, and follow the zip script only if asked.
-   Suggested first message: "Hi, it's NoNo. My user id is noah_ito_3850. I want to check how much
+   First message (fixed, as in simulated mode): "Hi, it's NoNo. My user id is noah_ito_3850. I want to check how much
    I paid for my most recent order."
 4. The session ends when the participant says they're done; the facilitator clicks **End session**.
 5. The page shows the run folder it wrote (`var/eval/user-testing-<date>/case-67/runs/run-<n>/`).

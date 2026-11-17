@@ -2,7 +2,8 @@
 
 The guidelines and scenario layout are copied from τ²-bench (commit 5bfa7e37):
 `data/tau2/user_simulator/simulation_guidelines.md` and `src/tau2/data_model/tasks.py`.
-The customer sees only what the agent says, never its tool calls.
+The customer sees only what the agent says, never its tool calls. Our one addition: a case can
+fix the customer's first message (`OPENERS`), as its protocol does for user testing.
 """
 
 import textwrap
@@ -33,6 +34,13 @@ Your goal is to simulate realistic customer interactions while following specifi
 Remember: The goal is to create realistic, natural conversations while strictly adhering to the provided instructions and maintaining character consistency."""
 
 STOP_TOKENS = ("###STOP###", "###TRANSFER###", "###OUT-OF-SCOPE###")
+
+# A test case whose protocol fixes the customer's first message (the same line a person types in
+# user testing). The simulated customer sends it word for word, then plays the scenario from there.
+OPENERS = {
+    "67": "Hi, it's NoNo. My user id is noah_ito_3850. I want to check how much I paid for my "
+    "most recent order.",
+}
 
 
 def scenario_text(task: dict) -> str:
@@ -75,6 +83,11 @@ class CustomerSimulator:
         return f"{GUIDELINES}\n\n<scenario>\n{scenario_text(self.task)}\n</scenario>"
 
     async def next_message(self, agent_text: str) -> str:
+        opener = OPENERS.get(self.task["id"])
+        if opener and not self.history:
+            # The case's protocol fixes the first message; the simulator continues from it.
+            self.history += [("agent", agent_text), ("customer", opener)]
+            return opener
         self.history.append(("agent", agent_text))
         # Roles flipped, as in τ²-bench: the agent speaks as "user" to the simulator's LLM.
         messages = [{"role": "system", "content": self.system_prompt}] + [
