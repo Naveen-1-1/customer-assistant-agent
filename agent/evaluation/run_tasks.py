@@ -24,7 +24,7 @@ from agent.baseline.agent import FIRST_MESSAGE, BaselineAgent
 from agent.baseline.model_client import InfraError
 from agent.evaluation.grader import db_state, load_db, load_tasks
 from agent.evaluation.outputs import next_run_numbers, notes, run_folder, write_run
-from agent.evaluation.simulated_customer import CustomerSimulator, stop_reason
+from agent.evaluation.simulated_customer import OPENERS, CustomerSimulator, stop_reason
 from agent.settings import Settings, get_settings
 from agent.store import InMemoryBackend, RetailStore
 
@@ -74,7 +74,11 @@ async def run_conversation(
         model=args.model,
         user_model=args.user_model,
         trial=n,
-        settings={"max_turns": args.max_turns, "rpm": args.rpm},
+        settings={
+            "max_turns": args.max_turns,
+            "rpm": args.rpm,
+            "fixed_first_message": OPENERS.get(task["id"]),
+        },
     )
     sim = CustomerSimulator(task, settings, limiter, args.user_model)
     status, termination, agent = "ok", "max_turns", None
